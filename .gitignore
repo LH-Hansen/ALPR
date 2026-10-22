@@ -15,7 +15,7 @@ obj/
 
 # Machine Learning
 runs/
-*.pt
+# *.pt
 *.onnx
 *.pth
 
@@ -23,6 +23,10 @@ runs/
 UC3M-LP/
 UC3M-LP-yolo/
 datasets/
+danish_ocr_synthetic/
+OCR_mixed/
+german_ocr_synthetic/
+OCR_mixed_dk_de/
 
 # Uploaded and generated images
 uploads/
