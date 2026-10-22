@@ -39,3 +39,4 @@ outputs/
 # Temporary files
 *.log
 *.tmp
+/alpr_webui/models/character_reader_backup.pt
