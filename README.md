@@ -1,107 +1,113 @@
 # Automatic License Plate Recognition (ALPR)
 
-A small machine learning project that finds license plates in photos and tries to read the characters on them.
+I'm building a small machine learning project that can find a license plate in a photograph and read the characters on it. The idea is to make it easy to test different images through a simple website, while keeping the recognition itself available through an API for other applications.
 
-It's still a work in progress, so far spanish plates are working somehwta reliably, but the plan is to extend the training data to encompass multible countries within the EU.
+The project started with Spanish plates using the [UC3M-LP dataset](https://github.com/ramajoballester/UC3M-LP). I've since worked on expanding the character-recognition training data with **synthetic Danish and German plate images**. It's still a work in progress: training on more plate styles doesn't automatically mean it will read real plates from every country reliably.
 
-![Example recognition result](test_car_result.jpg)
+![Example of a recognized plate](test_car_result.jpg)
 
 ## How it works
 
-The system uses **two YOLO models**, each with a separate job:
+There are two separate YOLO models:
 
-1. **Plate detection:** finds license plates in a vehicle image.
-2. **Character recognition:** looks at each detected plate and identifies its letters and numbers.
+1. **Plate detector:** Finds the license plate in a vehicle photo and returns its position.
+2. **Character reader:** Takes the cropped plate image, detects letters and digits, and puts them into reading order.
 
-The detected characters are put in reading order and returned to the web app. The result is shown on the uploaded image, with a box around each detected plate.
+I keep these models separate so I can improve character recognition without retraining the plate detector every time. The reader currently uses the same **36 classes (0–9 and A–Z)** across Spanish, Danish and German training examples.
 
-The project is based on the [UC3M-LP dataset](https://github.com/ramajoballester/UC3M-LP), which provides annotated vehicle images for training. Training and inference use Python, PyTorch, and Ultralytics YOLO.
+The web app sends an uploaded image to a [FastAPI](https://fastapi.tiangolo.com/) endpoint and draws the detections over the image preview. The API also returns the results as JSON, so a different frontend could use it later.
 
-## What's in the repository?
+## What's in this repository?
 
 ```text
 ALPR/
-├── ALPRApp/               # Visual Studio project and ML development work
-├── alpr_webui/            # Web frontend and FastAPI backend
+├── ALPRApp/               # Visual Studio / Python development work
+├── alpr_webui/            # FastAPI backend and web frontend
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── static/
+│   └── models/
+│       ├── plate_detector.pt
+│       └── character_reader.pt
 ├── test_car.jpg           # Example input image
-├── test_car_result.jpg    # Example annotated result
-└── .gitignore
+├── test_car_result.jpg    # Example recognition output
+├── .gitignore
+├── .gitattributes         # Git LFS configuration for model files
+└── README.md
 ```
 
-The web app has a simple image uploader and a **REST API**, so the recognition functionality can also be used from another frontend or application later on.
-
-**Note:** The training dataset, Python environment, and trained model weights are not stored in this GitHub repository. You'll need your own trained weights to run recognition.
+The two `.pt` files are the **trained weights used by the web app**. They're intended to be distributed using **Git LFS**, while the raw training datasets, virtual environments, and intermediate training runs stay outside Git. If the model files aren't available in a particular clone, the API can't run recognition until they're added.
 
 ## Run the web app locally
 
-These instructions are for **Windows 11** with **Python 3.11**. Visual Studio 2022 can be used for development, but isn't required to run the web server.
+These instructions are for **Windows 11 with Python 3.11**. I use Visual Studio 2022 for development, but you can run the app directly from PowerShell.
 
-### 1. Clone the project
+### 1. Clone the repository
+
+Install [Git](https://git-scm.com/) and [Git LFS](https://git-lfs.com/) first. Then run:
 
 ```powershell
+git lfs install
 git clone https://github.com/LH-Hansen/ALPR.git C:\ALPR
 cd C:\ALPR
+git lfs pull
 ```
 
-### 2. Create a Python environment and install dependencies
+### 2. Install Python dependencies
 
 ```powershell
 py -3.11 -m venv .venv
-
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 .\.venv\Scripts\python.exe -m pip install -r .\alpr_webui\requirements.txt
 ```
 
-This installs the **CPU version** of PyTorch. It keeps the initial setup straightforward; running the models on a supported GPU would require a different PyTorch setup.
+This uses CPU-based PyTorch. GPU support depends on the available hardware and PyTorch installation.
 
-### 3. Add the trained models
+### 3. Check the model files
 
-The API expects these two files:
+The API expects:
 
 ```text
 C:\ALPR\alpr_webui\models\plate_detector.pt
 C:\ALPR\alpr_webui\models\character_reader.pt
 ```
 
-If you trained the models using the project layout from development, create the destination folder and copy them with:
+If the weights haven't been committed through Git LFS yet, copy your locally trained models into those locations. For example:
 
 ```powershell
 New-Item -ItemType Directory -Force C:\ALPR\alpr_webui\models
 Copy-Item C:\ALPR\runs\plate_detector\weights\best.pt C:\ALPR\alpr_webui\models\plate_detector.pt
-Copy-Item C:\ALPR\runs\character_reader\weights\best.pt C:\ALPR\alpr_webui\models\character_reader.pt
+Copy-Item C:\ALPR\runs\character_reader_dk_de\weights\best.pt C:\ALPR\alpr_webui\models\character_reader.pt
 ```
 
-The models must be trained separately. The original [UC3M-LP repository](https://github.com/ramajoballester/UC3M-LP) includes the annotation conversion scripts used to prepare the plate and character datasets.
+Your training output directory might have a suffix like `-2`, so use the actual directory printed at the end of training.
 
-### 4. Start the API and website
+### 4. Start the web app
 
 ```powershell
 cd C:\ALPR\alpr_webui
 & C:\ALPR\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Then visit:
+Open **http://127.0.0.1:8000/**, upload an image and select **Recognize plates**.
 
-- **Web app:** http://127.0.0.1:8000/
-- **API documentation:** http://127.0.0.1:8000/docs
-
-Upload a JPEG, PNG, or WebP image and select **Recognize plates**. The app will display the detected text and mark the plate locations on the image.
+Interactive API documentation is available at **http://127.0.0.1:8000/docs**.
 
 ## Using the API
 
-You don't have to use the included frontend. Any application that can send an HTTP file upload can use the same API.
+The website isn't required. You can send an image to the same API from another frontend or program.
 
 **Endpoint:** `POST /api/recognize`  
-**Request:** `multipart/form-data` with an image field named `file`
+**Body:** `multipart/form-data` with a file field named `file`
 
-For example, from PowerShell:
+PowerShell example:
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/api/recognize -F "file=@C:\ALPR\test_car.jpg"
 ```
 
-The response looks like this (example values, not a measured result):
+Example JSON (illustrative values):
 
 ```json
 {
@@ -121,26 +127,65 @@ The response looks like this (example values, not a measured result):
 }
 ```
 
-The character list is shortened here to keep the example readable. `confidence` on the plate refers to the **detection confidence**, not the chance that the complete plate number is correct.
+The character list is shortened above. The plate's `confidence` is the *detection confidence*, not a confidence score for the entire recognized plate number.
+
+## Training and expanding the OCR model
+
+The plate detector was trained using UC3M-LP images. The OCR model also started with UC3M-LP, and I've experimented with adding synthetic plate crops from Denmark and Germany.
+
+| Training data | Purpose |
+| --- | --- |
+| UC3M-LP (Spain) | Original vehicle images, plate boxes, and character boxes |
+| Danish synthetic OCR | Danish-style cropped plates with individual character labels |
+| German synthetic OCR | German-style cropped plates with individual character labels |
+
+The synthetic datasets use the same YOLO class numbering as the original OCR dataset. They are for **Model 2 only**; adding them does not require changing Model 1.
+
+The training files themselves aren't stored in this repository because they can be large. To reproduce the training, start with the [UC3M-LP repository](https://github.com/ramajoballester/UC3M-LP) and its annotation conversion script, then prepare the combined OCR dataset locally.
+
+An example fine-tuning command, assuming the combined dataset exists at `C:\ALPR\OCR_mixed_dk_de`:
+
+```powershell
+& C:\ALPR\.venv\Scripts\yolo.exe detect train model=C:/ALPR/runs/character_reader_dk-2/weights/best.pt data=C:/ALPR/OCR_mixed_dk_de/data.yaml epochs=25 imgsz=480 batch=4 device=cpu workers=0 fliplr=0 flipud=0 mosaic=0 project=C:/ALPR/runs name=character_reader_dk_de
+```
+
+Ultralytics can add numbered suffixes to run folders, so check the final output path before copying `best.pt` into the web app.
+
+## Model files and Git LFS
+
+I keep the production model files under `alpr_webui/models/`. Git LFS is configured to track `.pt` files in that folder, rather than putting large binary weights directly into normal Git history.
+
+To add or update the weights:
+
+```powershell
+cd C:\ALPR
+git lfs install
+git lfs track "alpr_webui/models/*.pt"
+git add .gitattributes alpr_webui/models/plate_detector.pt alpr_webui/models/character_reader.pt
+git commit -m "Update trained ALPR models"
+git push
+```
+
+Use `git lfs ls-files` to verify that both weights are tracked by LFS. Only the two models used for inference need to be published; training datasets and intermediate checkpoints can stay local.
 
 ## Current limitations
 
-- **Dataset bias:** UC3M-LP mainly contains Spanish license plates. Danish and other formats need more representative testing and probably additional training.
-- **Reading order:** Characters are sorted left to right. Multi-line plates aren't handled correctly yet.
-- **Hardware:** The example backend runs inference on the CPU.
-- **Uploads:** The API accepts JPEG, PNG, and WebP images up to **10 MB** and **20 megapixels**. Images are processed in memory rather than saved by the server.
-- **Deployment:** This is a local development project, not a production-ready public service. Public deployment would need authentication, HTTPS, stronger abuse protection, and appropriate privacy safeguards for vehicle images and registration numbers.
+- **Country support is still being evaluated.** Adding synthetic Danish and German training images does not establish real-world recognition accuracy. More real photos and a separate test set are needed.
+- **Single-row reading order:** Characters are currently sorted left to right. Double-row plates aren't handled correctly yet.
+- **Image quality matters:** Angled, blurred, distant or partially obscured plates can cause mistakes.
+- **Local demo:** The app runs inference on the CPU and isn't designed as a publicly exposed service yet.
+- **Upload limits:** JPEG, PNG and WebP images are supported up to 10 MB and 20 megapixels. The API processes uploads in memory instead of storing them.
 
-## What I'd like to improve
+## What I want to improve next
 
-- Test the complete recognition pipeline on more real-world photos.
-- Evaluate accuracy using whole-plate matches, not just detection metrics.
-- Improve recognition of Danish plates and images taken at an angle.
-- Support different plate layouts.
-- Explore deploying the models through ONNX and integrating them into a C# application.
+- Measure **whole-plate accuracy** using real photos from each country.
+- Add more representative Danish and German training data.
+- Improve recognition of angled and double-row plates.
+- Compare accuracy before and after OCR fine-tuning, so improvements for one country don't cause regressions for another.
+- Explore ONNX and a possible C# integration.
 
-## Credits
+## Credits and licensing
 
-The training data and conversion tools come from [UC3M-LP](https://github.com/ramajoballester/UC3M-LP). Model training and inference are built around [Ultralytics YOLO](https://docs.ultralytics.com/), with [FastAPI](https://fastapi.tiangolo.com/) providing the HTTP API.
+This project uses [UC3M-LP](https://github.com/ramajoballester/UC3M-LP), [Ultralytics YOLO](https://docs.ultralytics.com/) and [FastAPI](https://fastapi.tiangolo.com/).
 
-Please check the original dataset and model/framework licenses before redistributing data or deploying the software commercially.
+The original dataset and ML tooling have their own licenses. Check those terms before redistributing training data or using the project commercially. If the app is made public, license plate information also needs appropriate privacy and security safeguards.
