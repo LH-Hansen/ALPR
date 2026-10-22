@@ -1,0 +1,1 @@
+Copy trained best.pt files here and name them plate_detector.pt and character_reader.pt.

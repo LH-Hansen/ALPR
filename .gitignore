@@ -1,0 +1,37 @@
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+bin/
+obj/
+
+# Machine Learning
+runs/
+*.pt
+*.onnx
+*.pth
+
+# Datasets
+UC3M-LP/
+UC3M-LP-yolo/
+datasets/
+
+# Uploaded and generated images
+uploads/
+outputs/
+
+# Environment variables
+.env
+.env.*
+
+# Temporary files
+*.log
+*.tmp
