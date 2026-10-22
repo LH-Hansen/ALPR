@@ -2,9 +2,7 @@
 
 A small machine learning project that finds license plates in photos and tries to read the characters on them.
 
-I started this project to learn more about computer vision and how to turn trained models into an application people can actually use. The idea is simple: upload a picture of a vehicle, let the models find its plate, and see the result in a web browser.
-
-It's still a work in progress, so recognition won't be perfect—especially on plates that look different from the training data.
+It's still a work in progress, so far spanish plates are working somehwta reliably, but the plan is to extend the training data to encompass multible countries within the EU.
 
 ![Example recognition result](test_car_result.jpg)
 
