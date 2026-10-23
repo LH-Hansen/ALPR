@@ -26,6 +26,18 @@
     .preview {margin-top:18px;background:#0c1421;border-radius:12px;overflow:hidden;border:1px solid #354157;min-height:140px;display:grid;place-items:center}
     .preview p {color:#71839e;font-size:13px}
     canvas {display:block;width:100%;height:auto}
+    .model-picker {margin-top:20px}
+    .model-picker label {font-size:13px;font-weight:700;display:block;margin-bottom:8px}
+    select {width:100%;padding:12px;border-radius:10px;background:#0f1a29;border:1px solid #52657d;color:#e8f1fb;font-size:14px}
+    select:focus {outline:2px solid #6dbcae;outline-offset:2px}
+    .model-hint {margin-top:7px;color:#9caec4;font-size:12px;line-height:1.5}
+    .comparison {border-top:1px solid #304157;margin-top:22px;padding-top:18px}
+    .comparison h3 {font-size:14px;margin:0 0 8px}
+    .comparison p {font-size:12px;color:#9caec4;line-height:1.5}
+    .comparison table {width:100%;border-collapse:collapse;font-size:12px;text-align:left;table-layout:fixed}
+    .comparison td,.comparison th {padding:9px 5px;border-bottom:1px solid #304157;overflow-wrap:anywhere;vertical-align:top}
+    .comparison th {color:#b1c0d3}
+    .comparison .recognized {font-family:Consolas,monospace;color:#9de0ce}
     button {width:100%;padding:12px;margin-top:18px;border:0;border-radius:10px;background:#6dbcae;color:#10201d;font-weight:750;font-size:14px;cursor:pointer}
     button:disabled {opacity:.55;cursor:default}
     .plate {border:1px solid #40566d;border-radius:10px;margin:10px 0;padding:13px;background:#101b2b}
@@ -55,12 +67,24 @@
         </div>
         <input type="file" id="file" accept="image/jpeg,image/png,image/webp" hidden>
         <div class="preview" id="preview"><p id="placeholder">Image preview appears here</p><canvas id="canvas" hidden></canvas></div>
+        <div class="model-picker">
+          <label for="ocr-model">OCR model generation</label>
+          <select id="ocr-model" aria-label="OCR model generation" disabled>
+            <option>Loading models…</option>
+          </select>
+          <div id="model-hint" class="model-hint" aria-live="polite">Checking available model weights…</div>
+        </div>
         <button id="analyze" disabled>Recognize plates</button>
       </section>
       <section class="panel" aria-label="Recognition results">
         <h2>Recognition results</h2>
         <div id="message" aria-live="polite">Select an image and click Recognize plates.</div>
         <div id="results"></div>
+        <div class="comparison" id="comparison" hidden>
+          <h3>Compare OCR generations</h3>
+          <p>Run recognition with each generation using the same photo. The results below stay visible when you switch models.</p>
+          <div id="comparison-table"></div>
+        </div>
         <div class="hint">The confidence shown is the <strong>plate detection</strong> score, not the probability that the complete plate text is correct.<p>API endpoint: <code>POST /api/recognize</code></p><p><a href="/docs" style="color:#9edcca">Interactive API documentation →</a></p></div>
       </section>
     </div>
@@ -75,12 +99,32 @@
     const results = document.getElementById('results');
     const filename = document.getElementById('filename');
     const placeholder = document.getElementById('placeholder');
-    let selectedFile = null, bitmap = null, requestId = 0;
+    const modelSelect = document.getElementById('ocr-model');
+    const modelHint = document.getElementById('model-hint');
+    const comparison = document.getElementById('comparison');
+    const comparisonTable = document.getElementById('comparison-table');
+
+    let selectedFile = null;
+    let bitmap = null;
+    let requestId = 0;
+    let busy = false;
+    let modelInfo = [];
+    const history = new Map();
 
     function setMessage(text, error=false) {
       message.textContent = text;
       message.className = error ? 'error' : '';
     }
+
+    function canAnalyze() {
+      const entry = modelInfo.find(m => m.id === modelSelect.value);
+      return Boolean(selectedFile && entry && entry.available && !busy);
+    }
+
+    function updateButton() {
+      button.disabled = !canAnalyze();
+    }
+
     function draw(plates=[]) {
       if (!bitmap) return;
       canvas.width = bitmap.width;
@@ -103,11 +147,112 @@
         ctx.fillText(text, x1+6, top+h*0.75);
       });
     }
+
+    function renderPlates(plates) {
+      results.replaceChildren();
+      plates.forEach((plate, i) => {
+        const item = document.createElement('div');
+        item.className = 'plate';
+        const title = document.createElement('strong');
+        title.textContent = plate.text || 'Unreadable';
+        const subtitle = document.createElement('small');
+        subtitle.textContent = `Plate ${i+1} · ${(plate.confidence*100).toFixed(1)}% detection confidence`;
+        item.append(title, subtitle);
+        results.appendChild(item);
+      });
+    }
+
+    function renderComparison() {
+      comparison.hidden = history.size === 0;
+      comparisonTable.replaceChildren();
+      if (!history.size) return;
+      const table = document.createElement('table');
+      const head = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      for (const label of ['Model', 'Recognized text']) {
+        const th = document.createElement('th');
+        th.textContent = label;
+        headRow.appendChild(th);
+      }
+      head.appendChild(headRow);
+      table.appendChild(head);
+      const body = document.createElement('tbody');
+      for (const entry of modelInfo) {
+        const tr = document.createElement('tr');
+        const label = document.createElement('td');
+        label.textContent = entry.name;
+        const outcome = document.createElement('td');
+        outcome.className = 'recognized';
+        const snapshot = history.get(entry.id);
+        outcome.textContent = snapshot
+          ? (snapshot.plates.length ? snapshot.plates.map(p => p.text || 'Unreadable').join(' | ') : 'No plate detected')
+          : (entry.available ? 'Not tested' : 'Weights missing');
+        tr.append(label, outcome);
+        body.appendChild(tr);
+      }
+      table.appendChild(body);
+      comparisonTable.appendChild(table);
+    }
+
+    function showSelected() {
+      const snapshot = history.get(modelSelect.value);
+      const label = modelInfo.find(m => m.id === modelSelect.value)?.name || 'Selected model';
+      if (snapshot) {
+        draw(snapshot.plates);
+        renderPlates(snapshot.plates);
+        setMessage(`${label}: ${snapshot.plates.length} plate(s) detected (saved from this image).`);
+      } else {
+        draw();
+        results.replaceChildren();
+        setMessage('Ready to recognize with ' + label + '.');
+      }
+      renderComparison();
+      updateButton();
+    }
+
+    async function loadModels() {
+      try {
+        const response = await fetch('/api/models');
+        if (!response.ok) throw new Error('Could not load model list.');
+        const json = await response.json();
+        modelInfo = json.models;
+        modelSelect.replaceChildren();
+        modelInfo.forEach(entry => {
+          const opt = document.createElement('option');
+          opt.value = entry.id;
+          opt.textContent = entry.name + (entry.available ? '' : ' (weights missing)');
+          opt.disabled = !entry.available;
+          modelSelect.appendChild(opt);
+        });
+        const firstAvailable = modelInfo.find(m => m.available);
+        modelSelect.disabled = !firstAvailable;
+        if (firstAvailable) {
+          const preferred = modelInfo.find(m => m.id === json.default_model && m.available);
+          modelSelect.value = preferred ? preferred.id : firstAvailable.id;
+          modelHint.textContent = 'The plate detector stays the same. Only the OCR model changes.';
+        } else {
+          modelHint.textContent = 'No OCR weights are installed. See the setup instructions.';
+          setMessage('No OCR models available.', true);
+        }
+        updateButton();
+      } catch (err) {
+        modelSelect.disabled = true;
+        modelHint.textContent = 'Could not retrieve available OCR models.';
+        setMessage(err.message || 'Cannot connect to the API.', true);
+      }
+    }
+
     async function setFile(file) {
       if (!file) return;
       const id = ++requestId;
+      busy = false;
+      history.clear();
+      comparison.hidden = true;
+      comparisonTable.replaceChildren();
+      selectedFile = null;
       if (!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
         setMessage('Choose a JPEG, PNG or WebP image under 10 MB.', true);
+        updateButton();
         return;
       }
       try {
@@ -120,53 +265,61 @@
         results.replaceChildren();
         placeholder.hidden = true;
         canvas.hidden = false;
-        button.disabled = false;
-        setMessage('Ready to recognize.');
+        setMessage('Image ready. Choose a model and select Recognize plates.');
         draw();
       } catch {
         selectedFile = null;
-        button.disabled = true;
         setMessage('Could not open this image.', true);
       }
+      updateButton();
     }
+
     drop.addEventListener('click', () => fileInput.click());
-    drop.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+    drop.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
     fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
     drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragging'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('dragging'));
-    drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('dragging'); setFile(e.dataTransfer.files[0]); });
+    drop.addEventListener('drop', e => {
+      e.preventDefault(); drop.classList.remove('dragging'); setFile(e.dataTransfer.files[0]);
+    });
+    modelSelect.addEventListener('change', () => {
+      requestId++;
+      busy = false;
+      showSelected();
+    });
+
     button.addEventListener('click', async () => {
-      if (!selectedFile) return;
+      if (!canAnalyze()) return;
       const id = ++requestId;
-      button.disabled = true;
+      const modelId = modelSelect.value;
+      busy = true;
+      updateButton();
       setMessage('Analyzing image…');
       results.replaceChildren();
       draw();
       const data = new FormData();
       data.append('file', selectedFile);
+      data.append('ocr_model', modelId);
       try {
         const response = await fetch('/api/recognize', {method:'POST',body:data});
         const json = await response.json();
         if (id !== requestId) return;
         if (!response.ok) throw new Error(typeof json.detail === 'string' ? json.detail : 'Recognition failed.');
-        draw(json.plates);
-        setMessage(json.plates.length ? `${json.plates.length} plate(s) detected` : 'No license plates detected.');
-        json.plates.forEach((plate, i) => {
-          const item = document.createElement('div');
-          item.className = 'plate';
-          const title = document.createElement('strong');
-          title.textContent = plate.text || 'Unreadable';
-          const subtitle = document.createElement('small');
-          subtitle.textContent = `Plate ${i+1} · ${(plate.confidence*100).toFixed(1)}% detection confidence`;
-          item.append(title, subtitle);
-          results.appendChild(item);
-        });
+        history.set(modelId, json);
+        showSelected();
       } catch (err) {
         if (id === requestId) setMessage(err.message || 'Could not connect to the API.', true);
       } finally {
-        if (id === requestId) button.disabled = false;
+        if (id === requestId) {
+          busy = false;
+          updateButton();
+        }
       }
     });
+
+    loadModels();
   </script>
 </body>
 </html>

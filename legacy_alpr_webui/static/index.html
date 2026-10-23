@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ALPR · License Plate Recognition</title>
+  <style>
+    :root {color-scheme:dark;font-family:Inter,Segoe UI,Arial,sans-serif;font-synthesis:none}
+    * {box-sizing:border-box}
+    body {margin:0;background:#101725;color:#edf1f8;min-height:100vh}
+    header {border-bottom:1px solid #283349;padding:19px max(28px,calc((100vw - 1080px)/2));display:flex;align-items:center;gap:12px}
+    .mark {background:#6dbcae;color:#101725;font-weight:900;font-size:13px;padding:9px;border-radius:8px}
+    header strong {font-size:15px;letter-spacing:.03em}
+    main {max-width:1080px;margin:52px auto;padding:0 24px}
+    .eyebrow {color:#6dbcae;font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+    h1 {margin:12px 0 8px;font-size:clamp(28px,4vw,43px);letter-spacing:-.04em}
+    .sub {color:#a5b3ca;margin:0 0 34px;line-height:1.6;max-width:630px}
+    .layout {display:grid;grid-template-columns: minmax(0,1.5fr) minmax(280px,1fr);gap:22px}
+    .panel {background:#192334;border:1px solid #2c3a51;border-radius:16px;padding:22px;min-width:0}
+    h2 {font-size:16px;margin:0 0 18px}
+    .drop {border:2px dashed #53647d;border-radius:12px;padding:26px;text-align:center;cursor:pointer;transition:background .15s,border .15s}
+    .drop.dragging,.drop:hover {background:#23354b;border-color:#6dbcae}
+    .drop span {display:block;font-weight:650;margin:7px 0}
+    .drop small,.note {color:#9caec4;font-size:12px}
+    .file {color:#6dbcae;font-size:12px;margin-top:12px;overflow-wrap:anywhere}
+    .preview {margin-top:18px;background:#0c1421;border-radius:12px;overflow:hidden;border:1px solid #354157;min-height:140px;display:grid;place-items:center}
+    .preview p {color:#71839e;font-size:13px}
+    canvas {display:block;width:100%;height:auto}
+    button {width:100%;padding:12px;margin-top:18px;border:0;border-radius:10px;background:#6dbcae;color:#10201d;font-weight:750;font-size:14px;cursor:pointer}
+    button:disabled {opacity:.55;cursor:default}
+    .plate {border:1px solid #40566d;border-radius:10px;margin:10px 0;padding:13px;background:#101b2b}
+    .plate strong {font-family:Consolas,monospace;font-size:25px;letter-spacing:.09em;overflow-wrap:anywhere}
+    .plate small {display:block;color:#a4b6ca;margin-top:8px}
+    #message {color:#a4b6ca;line-height:1.5;font-size:13px}
+    .error {color:#ffa3a3!important}
+    .hint {border-top:1px solid #304157;margin-top:22px;padding-top:16px;color:#8fa1b9;font-size:12px;line-height:1.6}
+    code {color:#95dbc9}
+    @media(max-width:780px){main{margin-top:28px}.layout{grid-template-columns:1fr}header{padding:17px 24px}}
+  </style>
+</head>
+<body>
+  <header><span class="mark">ALPR</span><strong>License Plate Recognition</strong></header>
+  <main>
+    <div class="eyebrow">Computer vision demo</div>
+    <h1>Read license plates from images.</h1>
+    <p class="sub">Upload a vehicle photograph to locate plates and recognize their characters with two trained YOLO models.</p>
+    <div class="layout">
+      <section class="panel" aria-label="Image upload">
+        <h2>Upload image</h2>
+        <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose a vehicle image">
+          <div aria-hidden="true" style="font-size:26px">▧</div>
+          <span>Choose an image or drag it here</span>
+          <small>JPEG, PNG or WebP · Maximum 10 MB</small>
+          <div id="filename" class="file"></div>
+        </div>
+        <input type="file" id="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <div class="preview" id="preview"><p id="placeholder">Image preview appears here</p><canvas id="canvas" hidden></canvas></div>
+        <button id="analyze" disabled>Recognize plates</button>
+      </section>
+      <section class="panel" aria-label="Recognition results">
+        <h2>Recognition results</h2>
+        <div id="message" aria-live="polite">Select an image and click Recognize plates.</div>
+        <div id="results"></div>
+        <div class="hint">The confidence shown is the <strong>plate detection</strong> score, not the probability that the complete plate text is correct.<p>API endpoint: <code>POST /api/recognize</code></p><p><a href="/docs" style="color:#9edcca">Interactive API documentation →</a></p></div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const fileInput = document.getElementById('file');
+    const drop = document.getElementById('drop');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const button = document.getElementById('analyze');
+    const message = document.getElementById('message');
+    const results = document.getElementById('results');
+    const filename = document.getElementById('filename');
+    const placeholder = document.getElementById('placeholder');
+    let selectedFile = null, bitmap = null, requestId = 0;
+
+    function setMessage(text, error=false) {
+      message.textContent = text;
+      message.className = error ? 'error' : '';
+    }
+    function draw(plates=[]) {
+      if (!bitmap) return;
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      ctx.drawImage(bitmap, 0, 0);
+      const line = Math.max(2, canvas.width / 350);
+      ctx.lineWidth = line;
+      ctx.font = `bold ${Math.max(18, canvas.width / 42)}px Consolas, monospace`;
+      plates.forEach(plate => {
+        const [x1,y1,x2,y2] = plate.box;
+        ctx.strokeStyle = '#50f1bf';
+        ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+        const text = plate.text || 'Unreadable';
+        const w = ctx.measureText(text).width + 12;
+        const h = Math.max(24, canvas.width / 32);
+        const top = y1 >= h ? y1-h : y2;
+        ctx.fillStyle = '#123b37';
+        ctx.fillRect(x1, top, w, h);
+        ctx.fillStyle = '#d8fff1';
+        ctx.fillText(text, x1+6, top+h*0.75);
+      });
+    }
+    async function setFile(file) {
+      if (!file) return;
+      const id = ++requestId;
+      if (!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+        setMessage('Choose a JPEG, PNG or WebP image under 10 MB.', true);
+        return;
+      }
+      try {
+        const next = await createImageBitmap(file);
+        if (id !== requestId) { next.close(); return; }
+        if (bitmap) bitmap.close();
+        bitmap = next;
+        selectedFile = file;
+        filename.textContent = file.name;
+        results.replaceChildren();
+        placeholder.hidden = true;
+        canvas.hidden = false;
+        button.disabled = false;
+        setMessage('Ready to recognize.');
+        draw();
+      } catch {
+        selectedFile = null;
+        button.disabled = true;
+        setMessage('Could not open this image.', true);
+      }
+    }
+    drop.addEventListener('click', () => fileInput.click());
+    drop.addEventListener('keydown', e => { if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+    fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragging'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('dragging'));
+    drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('dragging'); setFile(e.dataTransfer.files[0]); });
+    button.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      const id = ++requestId;
+      button.disabled = true;
+      setMessage('Analyzing image…');
+      results.replaceChildren();
+      draw();
+      const data = new FormData();
+      data.append('file', selectedFile);
+      try {
+        const response = await fetch('/api/recognize', {method:'POST',body:data});
+        const json = await response.json();
+        if (id !== requestId) return;
+        if (!response.ok) throw new Error(typeof json.detail === 'string' ? json.detail : 'Recognition failed.');
+        draw(json.plates);
+        setMessage(json.plates.length ? `${json.plates.length} plate(s) detected` : 'No license plates detected.');
+        json.plates.forEach((plate, i) => {
+          const item = document.createElement('div');
+          item.className = 'plate';
+          const title = document.createElement('strong');
+          title.textContent = plate.text || 'Unreadable';
+          const subtitle = document.createElement('small');
+          subtitle.textContent = `Plate ${i+1} · ${(plate.confidence*100).toFixed(1)}% detection confidence`;
+          item.append(title, subtitle);
+          results.appendChild(item);
+        });
+      } catch (err) {
+        if (id === requestId) setMessage(err.message || 'Could not connect to the API.', true);
+      } finally {
+        if (id === requestId) button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
